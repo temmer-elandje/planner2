@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Roosterplanner – 6 docenten (variabel) met rotatie</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 0; background:#f6f7fb; color:#111; }
+    header { padding: 1.2rem 1rem; background: #111827; color:#fff; }
+    header h1 { margin: 0; font-size: 1.2rem; }
+    main { max-width: 1100px; margin: 0 auto; padding: 1rem; }
+    .card { background: #fff; border-radius: 14px; box-shadow: 0 6px 22px rgba(0,0,0,.06); padding: 1rem; margin: 1rem 0; }
+    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: .8rem; }
+    label { font-weight: 600; font-size: .9rem; }
+    input, textarea { width: 100%; padding: .6rem .7rem; border:1px solid #d6d6dc; border-radius: 10px; font: inherit; }
+    textarea { min-height: 160px; resize: vertical; }
+    .hint { color:#555; font-size:.85rem; }
+    button { appearance:none; border:0; border-radius: 10px; padding: .7rem 1rem; cursor:pointer; font-weight:700; }
+    .btn { background:#2563eb; color:#fff; }
+    .btn.secondary { background:#e5e7eb; color:#111; }
+    .btn.ghost { background:transparent; border:1px solid #d6d6dc; }
+    .toolbar { display:flex; gap:.6rem; flex-wrap:wrap; }
+    .grid { overflow:auto; }
+    table { border-collapse: collapse; width:100%; min-width: 720px; }
+    th, td { border:1px solid #e5e7eb; padding: .5rem .6rem; vertical-align: top; }
+    th { background:#f3f4f6; text-align:left; position: sticky; top: 0; }
+    .period { margin-top: 1.2rem; }
+    .teacher { background:#fef3c7; font-weight:700; }
+    .footer { color:#555; font-size:.85rem; text-align:center; padding: 1rem 0 2rem; }
+    .chips { display:flex; flex-wrap:wrap; gap:.4rem; }
+    .chip { background:#eef2ff; border:1px solid #c7d2fe; border-radius:999px; padding:.15rem .6rem; font-size:.85rem; }
+    .muted { color:#6b7280; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Roosterplanner – rotatie over meerdere periodes</h1>
+  </header>
+  <main>
+    <section class="card">
+      <div class="row">
+        <div>
+          <label for="periods">Aantal periodes</label>
+          <input id="periods" type="number" min="1" value="5" />
+          <div class="hint">Standaard 5 periodes.</div>
+        </div>
+        <div>
+          <label for="teachers">Docenten (één per regel)</label>
+          <textarea id="teachers" placeholder="Docent 1\nDocent 2\nDocent 3\nDocent 4\nDocent 5\nDocent 6">Docent 1
+Docent 2
+Docent 3
+Docent 4
+Docent 5
+Docent 6</textarea>
+          <div class="hint">Aantal docenten is flexibel op basis van het aantal regels.</div>
+        </div>
+        <div>
+          <label for="students">Leerlingen (één per regel)</label>
+          <textarea id="students" placeholder="Vul je lijst met leerlingen hier in..."></textarea>
+          <div class="hint">Minimaal evenveel leerlingen als docenten. 22–50 werkt prima.</div>
+        </div>
+      </div>
+      <div class="toolbar" style="margin-top:.8rem">
+        <button class="btn" id="btn-generate">Genereer rooster</button>
+        <button class="btn secondary" id="btn-sample">Vul voorbeeldleerlingen</button>
+        <label style="display:inline-flex; align-items:center; gap:.4rem; font-weight:600">
+          <input id="mix" type="checkbox" checked /> Groepen door elkaar per periode
+        </label>
+        <button class="btn ghost" id="btn-export-csv" disabled>Exporteer CSV</button>
+        <button class="btn ghost" id="btn-export-json" disabled>Exporteer JSON</button>
+      </div>
+      <div class="hint" style="margin-top:.6rem">Rotatieregel: in periode <em>p</em> krijgt een docent een <em>andere</em> groep én schuift de groep naar een andere docent. Met de optie hierboven zorgen we ook dat de <em>groepssamenstelling</em> per periode wijzigt met zo min mogelijk herhaalde duo's.</div> style="margin-top:.6rem">Rotatieregel: in periode <em>p</em> krijgt docent met index <em>t</em> alle leerlingen <em>i</em> waarvoor <code>(i + p) mod T == t</code>. Zo schuift iedereen telkens één docent door.</div>
+    </section>
+
+    <section id="output" class="card">
+      <div class="muted">Nog geen rooster. Vul gegevens in en klik <b>Genereer rooster</b>.</div>
+    </section>
+
+    <p class="footer">Tip: Zet dit bestand als <code>index.html</code> in een GitHub‑repo en activeer <b>GitHub Pages</b> (Settings → Pages → Deploy from branch) om het direct te hosten.</p>
+  </main>
+
+  <script>
+    const el = (sel) => document.querySelector(sel);
+    const teachersBox = el('#teachers');
+    const studentsBox = el('#students');
+    const periodsBox  = el('#periods');
+    const out = el('#output');
+    const btnGen = el('#btn-generate');
+    const btnCSV = el('#btn-export-csv');
+    const btnJSON = el('#btn-export-json');
+    const btnSample = el('#btn-sample');
+    const mixBox = el('#mix');
+
+    let lastSchedule = null; // for export
+
+    btnSample.addEventListener('click', () => {
+      const sample = Array.from({length: 30}, (_,i)=>`Leerling ${i+1}`).join('\n');
+      studentsBox.value = sample;
+    });
+
+    btnGen.addEventListener('click', () => {
+      try {
+        const periods = Math.max(1, parseInt(periodsBox.value, 10) || 1);
+        const teachers = teachersBox.value.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+        const students = studentsBox.value.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+
+        if (teachers.length === 0) return uiError('Voer minimaal 1 docent in.');
+        if (students.length === 0) return uiError('Voer minimaal 1 leerling in.');
+
+        const schedule = buildSchedule({periods, teachers, students});
+        lastSchedule = schedule;
+        renderSchedule(schedule);
+        btnCSV.disabled = false; btnJSON.disabled = false;
+      } catch (e) {
+        uiError('Er ging iets mis bij het genereren: ' + e.message);
+        console.error(e);
+      }
+    });
+
+    btnCSV.addEventListener('click', () => {
+      if (!lastSchedule) return;
+      const csv = toCSV(lastSchedule);
+      download('rooster.csv', csv);
+    });
+
+    btnJSON.addEventListener('click', () => {
+      if (!lastSchedule) return;
+      const json = JSON.stringify(lastSchedule, null, 2);
+      download('rooster.json', json);
+    });
+
+    function buildSchedule({periods, teachers, students}) {
+      const T = teachers.length;
+      // Verdeel studenten initieel in T groepen zo gelijk mogelijk
+      // Daarna rotatie per periode met (group + p) % T
+      const groups0 = Array.from({length: T}, () => []);
+      students.forEach((name, i) => {
+        groups0[i % T].push({ name, index: i });
+      });
+
+      // Bouw periodes
+      const periodsArr = [];
+      for (let p = 0; p < periods; p++) {
+        const period = { period: p+1, teachers: [] };
+        for (let t = 0; t < T; t++) {
+          const teacherName = teachers[t];
+          // Rotatie: pak groep (t - p) mod T uit groups0
+          const srcIndex = ((t - p) % T + T) % T;
+          const learners = groups0[srcIndex].map(o => o.name);
+          period.teachers.push({ teacher: teacherName, students: learners });
+        }
+        periodsArr.push(period);
+      }
+
+      return { periods, teachers, students, data: periodsArr };
+    }
+
+    function renderSchedule(schedule) {
+      const { data } = schedule;
+      if (!data.length) return uiError('Geen data.');
+
+      const frag = document.createDocumentFragment();
+
+      data.forEach(periodObj => {
+        const container = document.createElement('div');
+        container.className = 'period';
+
+        const h = document.createElement('h2');
+        h.textContent = `Periode ${periodObj.period}`;
+        container.appendChild(h);
+
+        const grid = document.createElement('div');
+        grid.className = 'grid';
+
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        const headRow = document.createElement('tr');
+        periodObj.teachers.forEach(t => {
+          const th = document.createElement('th');
+          th.textContent = t.teacher;
+          th.className = 'teacher';
+          headRow.appendChild(th);
+        });
+        thead.appendChild(headRow);
+        table.appendChild(thead);
+
+        const maxLen = Math.max(...periodObj.teachers.map(t => t.students.length));
+        const tbody = document.createElement('tbody');
+        for (let r = 0; r < maxLen; r++) {
+          const tr = document.createElement('tr');
+          periodObj.teachers.forEach(t => {
+            const td = document.createElement('td');
+            td.textContent = t.students[r] || '';
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        grid.appendChild(table);
+        
+        // Stats: laat zien hoeveel duo's zijn herhaald per periode
+        const stats = document.createElement('div');
+        stats.className = 'muted';
+        if (periodObj.stats) {
+          const { repeatedPairs, totalPairs } = periodObj.stats;
+          stats.textContent = `Herhaalde duo's in deze periode: ${repeatedPairs} / ${totalPairs}`;
+        }
+        container.appendChild(grid);
+        container.appendChild(stats);
+        frag.appendChild(container);
+      });
+
+      out.innerHTML = '';
+      out.appendChild(frag);
+
+      // Chips
+      const chips = document.createElement('div');
+      chips.className = 'chips';
+      const tchip = document.createElement('div');
+      tchip.className = 'chip';
+      tchip.textContent = `${schedule.teachers.length} docenten`;
+      const schip = document.createElement('div');
+      schip.className = 'chip';
+      schip.textContent = `${schedule.students.length} leerlingen`;
+      const pchip = document.createElement('div');
+      pchip.className = 'chip';
+      pchip.textContent = `${schedule.periods} periodes`;
+      chips.appendChild(tchip); chips.appendChild(schip); chips.appendChild(pchip);
+      out.prepend(chips);
+    }
+
+    function uiError(msg) {
+      out.innerHTML = `<div style="color:#b91c1c; font-weight:600">${msg}</div>`;
+    }
+
+    function toCSV(schedule) {
+      // CSV per periode; kolommen = docenten; rijen = leerlingen per docent
+      let lines = [];
+      schedule.data.forEach(period => {
+        lines.push(`Periode ${period.period}`);
+        lines.push(period.teachers.map(t => escapeCSV(t.teacher)).join(','));
+        const maxLen = Math.max(...period.teachers.map(t => t.students.length));
+        for (let i = 0; i < maxLen; i++) {
+          lines.push(period.teachers.map(t => escapeCSV(t.students[i] || '')).join(','));
+        }
+        lines.push('');
+      });
+      return lines.join('\n');
+    }
+
+    function escapeCSV(s='') {
+      s = String(s);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+
+    function download(filename, content) {
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+  </script>
+</body>
+</html>
